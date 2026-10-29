@@ -1,0 +1,26 @@
+# Environment Variables (Secrets)
+.env
+.env.local
+.env.production
+.env.development
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Chrome Extension Junk / OS Files
+.DS_Store
+Thumbs.db
