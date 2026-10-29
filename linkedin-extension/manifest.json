@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Knowledge Vault Saver",
+  "version": "1.0",
+  "permissions": [
+    "contextMenus",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
