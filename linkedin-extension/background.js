@@ -27,7 +27,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const formData = new FormData();
       formData.append('text', payloadText);
 
-      const response = await fetch('http://localhost:8000/upload', {
+      const response = await fetch('https://knowledge-vault-backend-m4aj.onrender.com/upload', {
         method: 'POST',
         body: formData
       });
