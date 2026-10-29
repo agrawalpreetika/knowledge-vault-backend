@@ -162,7 +162,7 @@ async def handle_pwa_upload(
         gemini_contents.append(prompt)
 
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=gemini_contents
         )
         
