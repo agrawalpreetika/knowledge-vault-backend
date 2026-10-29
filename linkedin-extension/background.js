@@ -31,6 +31,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         method: 'POST',
         body: formData
       });
+        
+        
 
       const data = await response.json();
 

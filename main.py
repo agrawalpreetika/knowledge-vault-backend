@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -7,6 +8,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from github import Github
 from google import genai
+from PIL import Image
 
 load_dotenv()
 
@@ -39,7 +41,6 @@ def extract_link_details(url: str):
             title = data.get("title") or ""
             description = data.get("description") or ""
             
-            # Junk & Auth Wall Filter (Filters out Chinese/Japanese language selectors & generic headers)
             junk_keywords = ["linkedin", "log in", "sign up", "選擇語言", "select language", "join linkedin"]
             
             if any(junk in title.lower() for junk in junk_keywords):
@@ -56,6 +57,7 @@ def extract_link_details(url: str):
 @app.post("/upload")
 async def handle_pwa_upload(
     text: str = Form(None),
+    image_url: str = Form(None),
     file: UploadFile = File(None)
 ):
     try:
@@ -64,22 +66,33 @@ async def handle_pwa_upload(
         
         extracted_title = ""
         extracted_desc = ""
+        pil_image = None
         
-        # 1. Handle Web Links & LinkedIn Posts
+        # 1. Image URL download for Gemini Vision (from Context Menu or Payload)
+        if image_url:
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+                img_res = requests.get(image_url, headers=headers, timeout=10)
+                if img_res.status_code == 200:
+                    pil_image = Image.open(io.BytesIO(img_res.content))
+            except Exception as e:
+                print(f"Failed to load image from URL for Gemini Vision: {e}")
+
+        # 2. Handle Web Links & LinkedIn Posts
         if urls:
             target_url = urls[0]
             extracted_title, extracted_desc = extract_link_details(target_url)
             
-            # Remove raw URL from notes to get purely user typed text
             clean_user_notes = raw_text.replace(target_url, "").strip()
             
-            # Context constructed for AI categorization
             full_context = f"User Notes: {clean_user_notes}\nTitle: {extracted_title}\nSnippet: {extracted_desc}".strip()
             
-            # Formatting clean Markdown output
             file_content = f"# {clean_user_notes[:40] or extracted_title or 'LinkedIn Resource'}\n\n"
             file_content += f"**Source URL:** {target_url}\n\n---\n\n"
             
+            if image_url:
+                file_content += f"**Archived Image:** ![LinkedIn Image]({image_url})\n\n"
+                
             if extracted_desc:
                 file_content += f"**Extracted Summary:**\n{extracted_desc}\n\n"
                 
@@ -89,7 +102,7 @@ async def handle_pwa_upload(
             default_ext = ".md"
             input_type = "Link Archive"
 
-        # 2. Handle File Uploads (Images / PDFs)
+        # 3. Handle Direct File Uploads (Images / PDFs from PWA)
         elif file:
             file_data = await file.read()
             filename = file.filename.lower()
@@ -97,6 +110,10 @@ async def handle_pwa_upload(
             if filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
                 default_ext = ".png"
                 input_type = "Image"
+                try:
+                    pil_image = Image.open(io.BytesIO(file_data))
+                except Exception:
+                    pass
             elif filename.endswith('.pdf'):
                 default_ext = ".pdf"
                 input_type = "PDF"
@@ -104,29 +121,32 @@ async def handle_pwa_upload(
                 default_ext = ".bin"
                 input_type = "File"
 
-        # 3. Handle Plain Text Notes
+        # 4. Handle Plain Text Notes
         elif raw_text:
             full_context = raw_text
-            file_data = f"# Note Archive\n\n{raw_text}".encode('utf-8')
+            file_content = f"# Note Archive\n\n{raw_text}"
+            if image_url:
+                file_content += f"\n\n**Image Resource:** ![Image]({image_url})"
+            file_data = file_content.encode('utf-8')
             default_ext = ".md"
             input_type = "Text Note"
         else:
             raise HTTPException(status_code=400, detail="No content provided.")
 
-        # 4. Gemini AI Strict Categorization Prompt
+        # 5. Gemini AI Multimodal Categorization
         prompt = f"""
         You are an expert AI categorizer for a developer's Knowledge Vault.
-        Analyze this full input context:
+        Analyze this context along with any provided image visual content:
         ---
         {full_context}
         ---
 
         Categorize strictly based on technical topic:
-        - If context mentions Agentic AI, Agents, LLM, RAG, Prompt Engineering, LangChain, OpenAI, Gemini, GenAI -> Category MUST be 'AI_LLM'
-        - If context mentions React, Next.js, FastAPI, Node.js, HTML, CSS, Frontend, Backend -> Category MUST be 'WebDev'
-        - If context mentions Microservices, Distributed Systems, Kafka, System Architecture -> Category MUST be 'System_Design'
-        - If context mentions LeetCode, DSA, Trees, Graphs, Algorithms -> Category MUST be 'DSA'
-        - If context is strictly about job applications, resumes, referrals -> Category MUST be 'Career_Resources'
+        - If text or image content mentions Agentic AI, Agents, LLM, RAG, Prompt Engineering, LangChain, OpenAI, Gemini, GenAI, Machine Learning, Neural Networks -> Category MUST be 'AI_LLM'
+        - If text or image content mentions React, Next.js, FastAPI, Node.js, HTML, CSS, Frontend, Backend, Web Frameworks -> Category MUST be 'WebDev'
+        - If text or image content mentions Microservices, Distributed Systems, Kafka, System Architecture, Cloud, DevOps -> Category MUST be 'System_Design'
+        - If text or image content mentions LeetCode, DSA, Trees, Graphs, Algorithms, Data Structures -> Category MUST be 'DSA'
+        - If text or image content is strictly about job applications, resumes, referrals, interview experiences -> Category MUST be 'Career_Resources'
         - Otherwise -> Category 'General'
 
         Return ONLY a JSON object:
@@ -136,9 +156,14 @@ async def handle_pwa_upload(
         }}
         """
 
+        gemini_contents = []
+        if pil_image:
+            gemini_contents.append(pil_image)
+        gemini_contents.append(prompt)
+
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=prompt
+            model='gemini-2.5-flash',
+            contents=gemini_contents
         )
         
         cleaned_json = response.text.replace('```json', '').replace('```', '').strip()
@@ -148,7 +173,7 @@ async def handle_pwa_upload(
         base_name = result.get("filename", "saved_resource")
         github_path = f"{category}/{base_name}{default_ext}"
 
-        # 5. Commit to GitHub Repo
+        # 6. Commit to GitHub Repo
         repo = get_github_repo()
         repo.create_file(
             path=github_path,
