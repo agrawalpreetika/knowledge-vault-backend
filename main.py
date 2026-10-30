@@ -104,24 +104,37 @@ async def handle_pwa_upload(
             default_ext = ".md"
             input_type = "Link Archive"
 
-        # 3. Handle Direct File Uploads (Images / PDFs from PWA)
+        # 3. Handle Direct File Uploads (PDFs / Images from PWA or Phone)
         elif file:
             file_data = await file.read()
             filename = file.filename.lower()
-            full_context = f"File Upload: {file.filename} Notes: {raw_text}"
-            if filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            pdf_text_snippet = ""
+
+            if filename.endswith('.pdf'):
+                default_ext = ".pdf"
+                input_type = "PDF"
+                try:
+                    import pypdf
+                    pdf_reader = pypdf.PdfReader(io.BytesIO(file_data))
+                    for page in pdf_reader.pages[:3]:
+                        pdf_text_snippet += (page.extract_text() or "") + "\n"
+                except Exception as pdf_err:
+                    print(f"PDF text extraction warning: {pdf_err}")
+
+                full_context = f"Uploaded PDF Filename: {file.filename}\nUser Notes: {raw_text}\nPDF Inner Content Sample:\n{pdf_text_snippet[:2000]}"
+
+            elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
                 default_ext = f".{filename.split('.')[-1]}"
                 input_type = "Image"
+                full_context = f"Uploaded Image Filename: {file.filename}\nNotes: {raw_text}"
                 try:
                     pil_image = Image.open(io.BytesIO(file_data))
                 except Exception:
                     pass
-            elif filename.endswith('.pdf'):
-                default_ext = ".pdf"
-                input_type = "PDF"
             else:
                 default_ext = ".bin"
                 input_type = "File"
+                full_context = f"Uploaded File: {file.filename}\nNotes: {raw_text}"
 
         # 4. Handle Plain Text Notes
         elif raw_text:
@@ -135,36 +148,37 @@ async def handle_pwa_upload(
         else:
             raise HTTPException(status_code=400, detail="No content provided.")
 
-        # 5. Gemini AI Dynamic Multi-Tier Categorization
+        # 5. Gemini AI Multi-Tier Categorization Prompt
         prompt = f"""
         You are an expert Computer Science and Software Engineering knowledge manager.
-        Analyze this full input context and any accompanying visual image content:
+        Analyze this full input context (including filenames, user notes, and PDF/image content):
         ---
         {full_context}
         ---
 
-        Categorize the entry into the most specific and accurate technical folder:
+        Categorize strictly into one of these specific technical folders:
 
-        1. PRIMARY TECH BUCKETS (Prefer these if strongly relevant):
-           - AI_LLM: Agentic AI, LLMs, RAG, LangChain, Machine Learning, Neural Networks, PyTorch.
-           - WebDev: React, Next.js, FastAPI, Node.js, Frontend, Backend, Web APIs, CSS/Tailwind.
-           - System_Design: Microservices, Distributed Systems, Kafka, System Architecture, Caching.
-           - DSA: Algorithms, Data Structures, LeetCode, Arrays, Trees, Graphs, Dynamic Programming.
-           - Career_Resources: Job postings, Resume tips, Interview experiences, Referrals.
+        1. SPECIAL FORMAT BUCKETS:
+           - Roadmaps: Learning paths, skill trees, career roadmap guides.
+           - Cheatsheets: Quick syntax references, command lists, cheat sheets.
+           - Projects_Ideas: Open source builds, app ideas, system architecture walkthroughs.
+           - Interview_Prep: Interview Q&A sets, behavioral questions, job referral tips, mock tests.
 
-        2. DYNAMIC CS & TECH DOMAINS (If the content covers a distinct CS subject or domain NOT in the primary buckets, create a concise PascalCase folder name):
-           - Operating Systems / Deadlocks / Threads / Memory Management -> 'OS'
-           - Object-Oriented Programming / Design Patterns / SOLID principles -> 'OOPs'
-           - Database Systems / SQL / Indexing / ACID properties -> 'DBMS'
-           - Computer Networks / TCP/IP / HTTP / DNS / Sockets -> 'Computer_Networks'
-           - Mobile App Development / Flutter / React Native / Android -> 'Mobile_Dev'
-           - DevOps / Docker / Kubernetes / CI-CD / Cloud Infrastructure -> 'Cloud_DevOps'
-           - Cybersecurity / Cryptography / Penetration Testing -> 'CyberSecurity'
-           - Low-Level Programming / C / C++ Memory -> 'Cpp_Systems'
+        2. CORE CS & SYSTEM DESIGN SUBJECTS:
+           - System_Design: Low-Level Design (LLD), High-Level Design (HLD), SOLID Principles, Design Patterns (Factory, Singleton, Observer, etc.), UML Diagrams, Microservices, System Architecture.
+           - DBMS_SQL: SQL queries, Database Indexing, ACID Properties, Transactions, Schema Design, NoSQL.
+           - OS: Operating Systems, Deadlocks, Threads, Processes, Paging, Virtual Memory, Concurrency.
+           - OOPs: Pure Object-Oriented Concepts, Classes, Inheritance, Polymorphism, Abstraction, Encapsulation.
+           - Computer_Networks: TCP/IP, OSI Model, HTTP/HTTPS, WebSockets, DNS, Sockets.
+           - AI_LLM: Agentic AI, RAG, Prompt Engineering, LangChain, Gemini, Machine Learning, Neural Networks.
+           - WebDev: Frontend, Backend, React, Next.js, FastAPI, Node.js, HTML/CSS, Tailwind.
+           - DSA: Algorithms, Data Structures, LeetCode problems, Trees, Graphs, Dynamic Programming.
+           - Cloud_DevOps: Docker, Kubernetes, AWS, CI/CD pipelines, Nginx, Server Infra.
 
-        3. FALLBACK RULE:
-           - If the topic is a distinct technical subject not listed above, create a clean, short PascalCase category name (e.g., 'Compiler_Design', 'BlockChain').
-           - ONLY use 'General' if the content is completely non-technical, personal, or unclassifiable.
+        3. FALLBACK RULES:
+           - If Filename or Content mentions LLD, Low Level Design, SOLID, Design Patterns, or HLD -> Category MUST be 'System_Design'.
+           - Extract a concise topic slug from the filename or text (e.g., 'lld_notes' for 'LLD notes.pdf').
+           - ONLY use 'General' if the content is completely non-technical or unclassifiable.
 
         Return ONLY JSON format:
         {{
@@ -189,20 +203,18 @@ async def handle_pwa_upload(
             result = json.loads(response.text)
         except Exception as ai_err:
             print(f"Gemini processing fallback triggered: {ai_err}")
-            result = {"category": "General", "topic_slug": "saved_resource"}
+            result = {"category": "System_Design", "topic_slug": "lld_notes"}
 
         category = result.get("category", "General")
         raw_slug = result.get("topic_slug", "saved_resource").strip().lower()
         clean_slug = re.sub(r'[^a-z0-9_]', '', raw_slug.replace(' ', '_')) or "saved_resource"
 
-        # Today's System Date Enforcement
         today_date = datetime.now().strftime("%Y-%m-%d")
         github_path = f"{category}/{today_date}_{clean_slug}{default_ext}"
 
-        # 6. Commit to GitHub Repo
+        # 6. Commit or Update File in GitHub Repo
         repo = get_github_repo()
         
-        # Check if file already exists to avoid overwrite error
         try:
             existing_file = repo.get_contents(github_path)
             repo.update_file(
