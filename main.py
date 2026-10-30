@@ -3,11 +3,13 @@ import json
 import os
 import re
 import requests
+from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from github import Github
 from google import genai
+from google.genai import types
 from PIL import Image
 
 load_dotenv()
@@ -68,7 +70,7 @@ async def handle_pwa_upload(
         extracted_desc = ""
         pil_image = None
         
-        # 1. Image URL download for Gemini Vision (from Context Menu or Payload)
+        # 1. Image URL download for Gemini Vision
         if image_url:
             try:
                 headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
@@ -108,7 +110,7 @@ async def handle_pwa_upload(
             filename = file.filename.lower()
             full_context = f"File Upload: {file.filename} Notes: {raw_text}"
             if filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                default_ext = ".png"
+                default_ext = f".{filename.split('.')[-1]}"
                 input_type = "Image"
                 try:
                     pil_image = Image.open(io.BytesIO(file_data))
@@ -133,7 +135,7 @@ async def handle_pwa_upload(
         else:
             raise HTTPException(status_code=400, detail="No content provided.")
 
-        # 5. Gemini AI Multimodal Categorization
+        # 5. Gemini AI Multimodal Categorization with Strict Schema
         prompt = f"""
         You are an expert AI categorizer for a developer's Knowledge Vault.
         Analyze this context along with any provided image visual content:
@@ -149,10 +151,10 @@ async def handle_pwa_upload(
         - If text or image content is strictly about job applications, resumes, referrals, interview experiences -> Category MUST be 'Career_Resources'
         - Otherwise -> Category 'General'
 
-        Return ONLY a JSON object:
+        Return JSON format:
         {{
             "category": "Folder_Name",
-            "filename": "YYYY-MM-DD_short_descriptive_name"
+            "topic_slug": "short_snake_case_descriptive_name_without_date"
         }}
         """
 
@@ -161,27 +163,48 @@ async def handle_pwa_upload(
             gemini_contents.append(pil_image)
         gemini_contents.append(prompt)
 
-        response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=gemini_contents
-        )
-        
-        cleaned_json = response.text.replace('```json', '').replace('```', '').strip()
-        result = json.loads(cleaned_json)
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=gemini_contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+            result = json.loads(response.text)
+        except Exception as ai_err:
+            print(f"Gemini processing fallback triggered: {ai_err}")
+            result = {"category": "General", "topic_slug": "saved_resource"}
 
         category = result.get("category", "General")
-        base_name = result.get("filename", "saved_resource")
-        github_path = f"{category}/{base_name}{default_ext}"
+        raw_slug = result.get("topic_slug", "saved_resource").strip().lower()
+        clean_slug = re.sub(r'[^a-z0-9_]', '', raw_slug.replace(' ', '_')) or "saved_resource"
+
+        # Today's System Date Enforcement
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        github_path = f"{category}/{today_date}_{clean_slug}{default_ext}"
 
         # 6. Commit to GitHub Repo
         repo = get_github_repo()
-        repo.create_file(
-            path=github_path,
-            message=f"PWA archive ({input_type}): {base_name}",
-            content=file_data
-        )
+        
+        # Check if file already exists to avoid overwrite error
+        try:
+            existing_file = repo.get_contents(github_path)
+            repo.update_file(
+                path=github_path,
+                message=f"Update archive ({input_type}): {clean_slug}",
+                content=file_data,
+                sha=existing_file.sha
+            )
+        except Exception:
+            repo.create_file(
+                path=github_path,
+                message=f"PWA archive ({input_type}): {clean_slug}",
+                content=file_data
+            )
 
         return {"status": "success", "path": github_path, "category": category}
 
     except Exception as e:
+        print(f"Error handling upload: {e}")
         raise HTTPException(status_code=500, detail=str(e))
