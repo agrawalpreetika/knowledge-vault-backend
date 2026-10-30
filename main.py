@@ -135,25 +135,40 @@ async def handle_pwa_upload(
         else:
             raise HTTPException(status_code=400, detail="No content provided.")
 
-        # 5. Gemini AI Multimodal Categorization with Strict Schema
+        # 5. Gemini AI Dynamic Multi-Tier Categorization
         prompt = f"""
-        You are an expert AI categorizer for a developer's Knowledge Vault.
-        Analyze this context along with any provided image visual content:
+        You are an expert Computer Science and Software Engineering knowledge manager.
+        Analyze this full input context and any accompanying visual image content:
         ---
         {full_context}
         ---
 
-        Categorize strictly based on technical topic:
-        - If text or image content mentions Agentic AI, Agents, LLM, RAG, Prompt Engineering, LangChain, OpenAI, Gemini, GenAI, Machine Learning, Neural Networks -> Category MUST be 'AI_LLM'
-        - If text or image content mentions React, Next.js, FastAPI, Node.js, HTML, CSS, Frontend, Backend, Web Frameworks -> Category MUST be 'WebDev'
-        - If text or image content mentions Microservices, Distributed Systems, Kafka, System Architecture, Cloud, DevOps -> Category MUST be 'System_Design'
-        - If text or image content mentions LeetCode, DSA, Trees, Graphs, Algorithms, Data Structures -> Category MUST be 'DSA'
-        - If text or image content is strictly about job applications, resumes, referrals, interview experiences -> Category MUST be 'Career_Resources'
-        - Otherwise -> Category 'General'
+        Categorize the entry into the most specific and accurate technical folder:
 
-        Return JSON format:
+        1. PRIMARY TECH BUCKETS (Prefer these if strongly relevant):
+           - AI_LLM: Agentic AI, LLMs, RAG, LangChain, Machine Learning, Neural Networks, PyTorch.
+           - WebDev: React, Next.js, FastAPI, Node.js, Frontend, Backend, Web APIs, CSS/Tailwind.
+           - System_Design: Microservices, Distributed Systems, Kafka, System Architecture, Caching.
+           - DSA: Algorithms, Data Structures, LeetCode, Arrays, Trees, Graphs, Dynamic Programming.
+           - Career_Resources: Job postings, Resume tips, Interview experiences, Referrals.
+
+        2. DYNAMIC CS & TECH DOMAINS (If the content covers a distinct CS subject or domain NOT in the primary buckets, create a concise PascalCase folder name):
+           - Operating Systems / Deadlocks / Threads / Memory Management -> 'OS'
+           - Object-Oriented Programming / Design Patterns / SOLID principles -> 'OOPs'
+           - Database Systems / SQL / Indexing / ACID properties -> 'DBMS'
+           - Computer Networks / TCP/IP / HTTP / DNS / Sockets -> 'Computer_Networks'
+           - Mobile App Development / Flutter / React Native / Android -> 'Mobile_Dev'
+           - DevOps / Docker / Kubernetes / CI-CD / Cloud Infrastructure -> 'Cloud_DevOps'
+           - Cybersecurity / Cryptography / Penetration Testing -> 'CyberSecurity'
+           - Low-Level Programming / C / C++ Memory -> 'Cpp_Systems'
+
+        3. FALLBACK RULE:
+           - If the topic is a distinct technical subject not listed above, create a clean, short PascalCase category name (e.g., 'Compiler_Design', 'BlockChain').
+           - ONLY use 'General' if the content is completely non-technical, personal, or unclassifiable.
+
+        Return ONLY JSON format:
         {{
-            "category": "Folder_Name",
+            "category": "FolderName",
             "topic_slug": "short_snake_case_descriptive_name_without_date"
         }}
         """
