@@ -3,16 +3,16 @@ import { useState, useRef } from 'react';
 
 export default function Home() {
   const [text, setText] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [file, setFile] = useState(null);
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
-  
-  // Ref to explicitly clear file input on mobile browsers
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Mobile browsers par file input clear karne ke liye ref
+  const fileInputRef = useRef(null);
 
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-  const handleUpload = async (e: React.FormEvent) => {
+  const handleUpload = async (e) => {
     e.preventDefault();
     if (!text && !file) {
       setStatus('⚠️ Kripya text, link ya file upload karein.');
@@ -34,10 +34,10 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok) {
-        // Dynamic path display directly from backend response
+        // Dynamic folder category aur exact path backend se show hoga
         setStatus(`✅ Saved successfully to ${data.category} folder: ${data.path}`);
         
-        // Reset states and clear file input element explicitly
+        // Form states aur DOM file input element reset karein
         setText('');
         setFile(null);
         if (fileInputRef.current) {
@@ -46,7 +46,7 @@ export default function Home() {
       } else {
         setStatus(`❌ Error: ${data.detail || 'Upload failed'}`);
       }
-    } catch (err: any) {
+    } catch (err) {
       setStatus(`❌ Network Error: ${err.message}`);
     } finally {
       setLoading(false);
@@ -62,7 +62,7 @@ export default function Home() {
           <div>
             <label className="block text-sm font-medium mb-1">Text Note / Link</label>
             <textarea
-              rows={4}
+              rows="4"
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="Paste LinkedIn post link, web URL, or notes here..."
