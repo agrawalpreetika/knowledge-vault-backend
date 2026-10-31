@@ -3,6 +3,7 @@ import json
 import os
 import re
 import requests
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -84,7 +85,6 @@ async def handle_pwa_upload(
         if urls:
             target_url = urls[0]
             extracted_title, extracted_desc = extract_link_details(target_url)
-            
             clean_user_notes = raw_text.replace(target_url, "").strip()
             
             full_context = f"User Notes: {clean_user_notes}\nTitle: {extracted_title}\nSnippet: {extracted_desc}".strip()
@@ -104,7 +104,7 @@ async def handle_pwa_upload(
             default_ext = ".md"
             input_type = "Link Archive"
 
-        # 3. Handle Direct File Uploads (PDFs / Images from PWA or Phone)
+        # 3. Handle Direct File Uploads (PDFs / Images)
         elif file:
             file_data = await file.read()
             filename = file.filename.lower()
@@ -121,7 +121,7 @@ async def handle_pwa_upload(
                 except Exception as pdf_err:
                     print(f"PDF text extraction warning: {pdf_err}")
 
-                full_context = f"Uploaded PDF Filename: {file.filename}\nUser Notes: {raw_text}\nPDF Inner Content Sample:\n{pdf_text_snippet[:2000]}"
+                full_context = f"Uploaded File Original Name: {file.filename}\nUser Notes: {raw_text}\nPDF Inner Content Sample:\n{pdf_text_snippet[:2000]}"
 
             elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
                 default_ext = f".{filename.split('.')[-1]}"
@@ -134,7 +134,7 @@ async def handle_pwa_upload(
             else:
                 default_ext = ".bin"
                 input_type = "File"
-                full_context = f"Uploaded File: {file.filename}\nNotes: {raw_text}"
+                full_context = f"Uploaded File Original Name: {file.filename}\nNotes: {raw_text}"
 
         # 4. Handle Plain Text Notes
         elif raw_text:
@@ -151,7 +151,7 @@ async def handle_pwa_upload(
         # 5. Gemini AI Multi-Tier Categorization Prompt
         prompt = f"""
         You are an expert Computer Science and Software Engineering knowledge manager.
-        Analyze this full input context (including filenames, user notes, and PDF/image content):
+        Analyze this full input context (including original filename, notes, and inner text):
         ---
         {full_context}
         ---
@@ -175,9 +175,11 @@ async def handle_pwa_upload(
            - DSA: Algorithms, Data Structures, LeetCode problems, Trees, Graphs, Dynamic Programming.
            - Cloud_DevOps: Docker, Kubernetes, AWS, CI/CD pipelines, Nginx, Server Infra.
 
-        3. FALLBACK RULES:
-           - If Filename or Content mentions LLD, Low Level Design, SOLID, Design Patterns, or HLD -> Category MUST be 'System_Design'.
-           - Extract a concise topic slug from the filename or text (e.g., 'lld_notes' for 'LLD notes.pdf').
+        3. TOPIC SLUG RULES:
+           - Differentiate clearly between 'notes' and 'roadmap' or 'guide'.
+           - If content/filename is a Roadmap, category MUST be 'Roadmaps' and slug should contain 'roadmap' (e.g., 'nld_11th_roadmap').
+           - If content/filename is Notes, slug should contain 'notes' (e.g., 'nld_notes').
+           - Make topic_slug specific and descriptive in snake_case.
            - ONLY use 'General' if the content is completely non-technical or unclassifiable.
 
         Return ONLY JSON format:
@@ -210,25 +212,26 @@ async def handle_pwa_upload(
         clean_slug = re.sub(r'[^a-z0-9_]', '', raw_slug.replace(' ', '_')) or "saved_resource"
 
         today_date = datetime.now().strftime("%Y-%m-%d")
-        github_path = f"{category}/{today_date}_{clean_slug}{default_ext}"
+        base_github_path = f"{category}/{today_date}_{clean_slug}"
+        github_path = f"{base_github_path}{default_ext}"
 
-        # 6. Commit or Update File in GitHub Repo
+        # 6. Commit to GitHub Repo with Overwrite Protection
         repo = get_github_repo()
         
         try:
-            existing_file = repo.get_contents(github_path)
-            repo.update_file(
-                path=github_path,
-                message=f"Update archive ({input_type}): {clean_slug}",
-                content=file_data,
-                sha=existing_file.sha
-            )
+            repo.get_contents(github_path)
+            # File already exists! Append timestamp suffix so existing file is NEVER overwritten
+            timestamp_suffix = int(time.time()) % 10000
+            github_path = f"{base_github_path}_{timestamp_suffix}{default_ext}"
         except Exception:
-            repo.create_file(
-                path=github_path,
-                message=f"PWA archive ({input_type}): {clean_slug}",
-                content=file_data
-            )
+            # File does not exist yet, safe to create with clean path
+            pass
+
+        repo.create_file(
+            path=github_path,
+            message=f"PWA archive ({input_type}): {clean_slug}",
+            content=file_data
+        )
 
         return {"status": "success", "path": github_path, "category": category}
 
