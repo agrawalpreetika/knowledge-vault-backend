@@ -1,15 +1,18 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 export default function Home() {
   const [text, setText] = useState('');
-  const [file, setFile] = useState(null);
+  const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // Ref to explicitly clear file input on mobile browsers
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-  const handleUpload = async (e) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!text && !file) {
       setStatus('⚠️ Kripya text, link ya file upload karein.');
@@ -31,13 +34,19 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok) {
-        setStatus(`✅ Saved successfully to ${data.path}`);
+        // Dynamic path display directly from backend response
+        setStatus(`✅ Saved successfully to ${data.category} folder: ${data.path}`);
+        
+        // Reset states and clear file input element explicitly
         setText('');
         setFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       } else {
         setStatus(`❌ Error: ${data.detail || 'Upload failed'}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       setStatus(`❌ Network Error: ${err.message}`);
     } finally {
       setLoading(false);
@@ -53,7 +62,7 @@ export default function Home() {
           <div>
             <label className="block text-sm font-medium mb-1">Text Note / Link</label>
             <textarea
-              rows="4"
+              rows={4}
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="Paste LinkedIn post link, web URL, or notes here..."
@@ -64,9 +73,10 @@ export default function Home() {
           <div>
             <label className="block text-sm font-medium mb-1">Screenshot / PDF</label>
             <input
+              ref={fileInputRef}
               type="file"
               accept="image/*,application/pdf"
-              onChange={(e) => setFile(e.target.files[0])}
+              onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)}
               className="w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-500 file:text-slate-900 hover:file:bg-emerald-400"
             />
           </div>
