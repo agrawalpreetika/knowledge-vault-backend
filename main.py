@@ -57,6 +57,36 @@ def extract_link_details(url: str):
     
     return "", ""
 
+def sanitize_slug(name: str) -> str:
+    """Helper to convert raw file name or title into clean snake_case slug"""
+    clean = re.sub(r'\.[^/.]+$', '', name)  # Remove extension if present
+    clean = re.sub(r'[^a-zA-Z0-9_]', '_', clean.replace(' ', '_')).lower()
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    return clean or "resource_file"
+
+def derive_keyword_category(context_str: str) -> str:
+    """Fallback classifier based on keywords if Gemini fails"""
+    ctx = context_str.lower()
+    if any(k in ctx for k in ["sql", "database", "dbms", "postgres", "mysql", "queries"]):
+        return "DBMS_SQL"
+    elif any(k in ctx for k in ["roadmap", "pathway", "guide", "career"]):
+        return "Roadmaps"
+    elif any(k in ctx for k in ["cheatsheet", "cheat sheet", "syntax", "quick reference"]):
+        return "Cheatsheets"
+    elif any(k in ctx for k in ["os", "operating system", "deadlock", "process", "thread", "paging"]):
+        return "OS"
+    elif any(k in ctx for k in ["lld", "hld", "system design", "solid", "design pattern", "uml"]):
+        return "System_Design"
+    elif any(k in ctx for k in ["oop", "oops", "polymorphism", "inheritance", "abstraction"]):
+        return "OOPs"
+    elif any(k in ctx for k in ["llm", "rag", "agent", "gemini", "gpt", "prompt", "ai"]):
+        return "AI_LLM"
+    elif any(k in ctx for k in ["react", "nextjs", "fastapi", "node", "web", "frontend", "backend"]):
+        return "WebDev"
+    elif any(k in ctx for k in ["dsa", "leetcode", "algorithm", "binary tree", "graph"]):
+        return "DSA"
+    return "General"
+
 @app.post("/upload")
 async def handle_pwa_upload(
     text: str = Form(None),
@@ -70,6 +100,7 @@ async def handle_pwa_upload(
         extracted_title = ""
         extracted_desc = ""
         pil_image = None
+        fallback_slug = "resource_file"
         
         # 1. Image URL download for Gemini Vision
         if image_url:
@@ -103,11 +134,13 @@ async def handle_pwa_upload(
             file_data = file_content.encode('utf-8')
             default_ext = ".md"
             input_type = "Link Archive"
+            fallback_slug = sanitize_slug(extracted_title or clean_user_notes[:30] or "link_archive")
 
         # 3. Handle Direct File Uploads (PDFs / Images)
         elif file:
             file_data = await file.read()
             filename = file.filename.lower()
+            fallback_slug = sanitize_slug(file.filename)
             pdf_text_snippet = ""
 
             if filename.endswith('.pdf'):
@@ -121,7 +154,7 @@ async def handle_pwa_upload(
                 except Exception as pdf_err:
                     print(f"PDF text extraction warning: {pdf_err}")
 
-                full_context = f"Uploaded File Original Name: {file.filename}\nUser Notes: {raw_text}\nPDF Inner Content Sample:\n{pdf_text_snippet[:2000]}"
+                full_context = f"Uploaded Original Filename: {file.filename}\nUser Notes: {raw_text}\nPDF Snippet:\n{pdf_text_snippet[:2000]}"
 
             elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
                 default_ext = f".{filename.split('.')[-1]}"
@@ -134,7 +167,7 @@ async def handle_pwa_upload(
             else:
                 default_ext = ".bin"
                 input_type = "File"
-                full_context = f"Uploaded File Original Name: {file.filename}\nNotes: {raw_text}"
+                full_context = f"Uploaded Original Filename: {file.filename}\nNotes: {raw_text}"
 
         # 4. Handle Plain Text Notes
         elif raw_text:
@@ -145,47 +178,41 @@ async def handle_pwa_upload(
             file_data = file_content.encode('utf-8')
             default_ext = ".md"
             input_type = "Text Note"
+            fallback_slug = sanitize_slug(raw_text[:30])
         else:
             raise HTTPException(status_code=400, detail="No content provided.")
 
         # 5. Gemini AI Multi-Tier Categorization Prompt
         prompt = f"""
         You are an expert Computer Science and Software Engineering knowledge manager.
-        Analyze this full input context (including original filename, notes, and inner text):
+        Analyze this full input context (original filename, notes, and inner text):
         ---
         {full_context}
         ---
 
-        Categorize strictly into one of these specific technical folders:
+        1. CATEGORY SELECTION RULES:
+           - DBMS_SQL: SQL queries, SQL handbooks, Database Indexing, ACID, Transactions, Schema Design, MySQL, Postgres, NoSQL.
+           - Roadmaps: Explicit learning paths, skill trees, roadmaps, career preparation plans.
+           - Cheatsheets: Quick syntax reference sheets, command lists, cheat sheets.
+           - System_Design: Low-Level Design (LLD), High-Level Design (HLD), SOLID Principles, Design Patterns, UML Diagrams, Microservices, Architecture.
+           - OS: Operating Systems, Process Synchronization, Deadlocks, Threads, Processes, Paging, Memory.
+           - OOPs: Object Oriented Programming, Classes, Inheritance, Polymorphism, Abstraction, Encapsulation.
+           - AI_LLM: LLM, Agentic AI, RAG, Prompt Engineering, LangChain, Machine Learning, Neural Networks.
+           - WebDev: Frontend, Backend, React, Next.js, FastAPI, Node.js, Tailwind, HTML/CSS.
+           - DSA: Algorithms, Data Structures, LeetCode, Arrays, Trees, Graphs, Dynamic Programming.
+           - Cloud_DevOps: Docker, Kubernetes, AWS, CI/CD pipelines, Nginx, Linux administration.
 
-        1. SPECIAL FORMAT BUCKETS:
-           - Roadmaps: Learning paths, skill trees, career roadmap guides.
-           - Cheatsheets: Quick syntax references, command lists, cheat sheets.
-           - Projects_Ideas: Open source builds, app ideas, system architecture walkthroughs.
-           - Interview_Prep: Interview Q&A sets, behavioral questions, job referral tips, mock tests.
-
-        2. CORE CS & SYSTEM DESIGN SUBJECTS:
-           - System_Design: Low-Level Design (LLD), High-Level Design (HLD), SOLID Principles, Design Patterns (Factory, Singleton, Observer, etc.), UML Diagrams, Microservices, System Architecture.
-           - DBMS_SQL: SQL queries, Database Indexing, ACID Properties, Transactions, Schema Design, NoSQL.
-           - OS: Operating Systems, Deadlocks, Threads, Processes, Paging, Virtual Memory, Concurrency.
-           - OOPs: Pure Object-Oriented Concepts, Classes, Inheritance, Polymorphism, Abstraction, Encapsulation.
-           - Computer_Networks: TCP/IP, OSI Model, HTTP/HTTPS, WebSockets, DNS, Sockets.
-           - AI_LLM: Agentic AI, RAG, Prompt Engineering, LangChain, Gemini, Machine Learning, Neural Networks.
-           - WebDev: Frontend, Backend, React, Next.js, FastAPI, Node.js, HTML/CSS, Tailwind.
-           - DSA: Algorithms, Data Structures, LeetCode problems, Trees, Graphs, Dynamic Programming.
-           - Cloud_DevOps: Docker, Kubernetes, AWS, CI/CD pipelines, Nginx, Server Infra.
-
-        3. TOPIC SLUG RULES:
-           - Differentiate clearly between 'notes' and 'roadmap' or 'guide'.
-           - If content/filename is a Roadmap, category MUST be 'Roadmaps' and slug should contain 'roadmap' (e.g., 'nld_11th_roadmap').
-           - If content/filename is Notes, slug should contain 'notes' (e.g., 'nld_notes').
-           - Make topic_slug specific and descriptive in snake_case.
-           - ONLY use 'General' if the content is completely non-technical or unclassifiable.
+        2. TOPIC SLUG RULES:
+           - Base the topic_slug on BOTH the original filename AND the core technical subject.
+           - Example 1: Original filename 'SQL Handbook.pdf' -> topic_slug: 'sql_handbook'
+           - Example 2: Original filename 'NLD 11th Roadmap.pdf' -> category: 'Roadmaps', topic_slug: 'nld_11th_roadmap'
+           - Example 3: Original filename 'NLD Notes.pdf' -> category: 'System_Design', topic_slug: 'nld_notes'
+           - NEVER use 'lld_notes' or 'system_design' as a default unless the content is genuinely about LLD / Design Patterns.
 
         Return ONLY JSON format:
         {{
             "category": "FolderName",
-            "topic_slug": "short_snake_case_descriptive_name_without_date"
+            "topic_slug": "short_snake_case_descriptive_name"
         }}
         """
 
@@ -193,6 +220,9 @@ async def handle_pwa_upload(
         if pil_image:
             gemini_contents.append(pil_image)
         gemini_contents.append(prompt)
+
+        # Keyword-based fallback category in case API call fails
+        fallback_category = derive_keyword_category(full_context)
 
         try:
             response = client.models.generate_content(
@@ -205,26 +235,26 @@ async def handle_pwa_upload(
             result = json.loads(response.text)
         except Exception as ai_err:
             print(f"Gemini processing fallback triggered: {ai_err}")
-            result = {"category": "System_Design", "topic_slug": "lld_notes"}
+            result = {"category": fallback_category, "topic_slug": fallback_slug}
 
-        category = result.get("category", "General")
-        raw_slug = result.get("topic_slug", "saved_resource").strip().lower()
-        clean_slug = re.sub(r'[^a-z0-9_]', '', raw_slug.replace(' ', '_')) or "saved_resource"
+        category = result.get("category", fallback_category)
+        raw_slug = result.get("topic_slug", fallback_slug).strip().lower()
+        clean_slug = sanitize_slug(raw_slug)
 
         today_date = datetime.now().strftime("%Y-%m-%d")
         base_github_path = f"{category}/{today_date}_{clean_slug}"
         github_path = f"{base_github_path}{default_ext}"
 
-        # 6. Commit to GitHub Repo with Overwrite Protection
+        # 6. Commit to GitHub Repo with Duplicate Overwrite Protection
         repo = get_github_repo()
         
         try:
             repo.get_contents(github_path)
-            # File already exists! Append timestamp suffix so existing file is NEVER overwritten
+            # File already exists on GitHub! Add timestamp hash suffix so no file is EVER overwritten.
             timestamp_suffix = int(time.time()) % 10000
             github_path = f"{base_github_path}_{timestamp_suffix}{default_ext}"
         except Exception:
-            # File does not exist yet, safe to create with clean path
+            # File does not exist yet, clean path is safe to use
             pass
 
         repo.create_file(
